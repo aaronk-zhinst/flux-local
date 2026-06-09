@@ -39,7 +39,7 @@ from flux_local.task import get_task_service
 from .git import fetch_git
 from .oci import fetch_oci
 from .artifact import GitArtifact
-from .secret import get_auth_from_secret
+from .secret import get_auth_from_secret, get_git_auth_from_secret
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -163,7 +163,30 @@ class SourceController:
 
     async def _fetch_git(self, resource_id: NamedResource, obj: GitRepository) -> None:
         """Fetch a Git repository."""
-        artifact = await fetch_git(obj)
+        auth = None
+        if obj.secret_ref:
+            waiter = DependencyWaiter(
+                self._store,
+                self._task_service,
+                resource_id,
+            )
+            secret_resource_id = NamedResource(
+                name=obj.secret_ref.name,
+                namespace=resource_id.namespace,
+                kind="Secret",
+            )
+            waiter.add(secret_resource_id)
+            async for event in waiter.watch():
+                if not event.success:
+                    error = f"Failed to get secret {secret_resource_id} for Git repository {resource_id}: {event.error_message}"
+                    _LOGGER.error(error)
+                    self._store.update_status(resource_id, Status.FAILED, error=error)
+                    return
+                if secret := self._store.get_object(secret_resource_id, Secret):
+                    auth = get_git_auth_from_secret(secret)
+                break
+
+        artifact = await fetch_git(obj, auth)
         _LOGGER.info("Fetched Git repository %s", resource_id)
         self._store.set_artifact(resource_id, artifact)
         self._store.update_status(resource_id, Status.READY)

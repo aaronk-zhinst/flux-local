@@ -19,6 +19,32 @@ class Auth:
     password: str
 
 
+def get_git_auth_from_secret(secret: Secret) -> Auth | None:
+    """Return credentials from a Flux GitRepository Secret.
+
+    Flux GitRepository Secrets use 'username' and 'password' keys, either
+    as plain text in stringData or base64-encoded in data.
+    """
+    username: str | None = None
+    password: str | None = None
+
+    if secret.data:
+        if username_b64 := secret.data.get("username"):
+            username = base64.b64decode(username_b64).decode("utf-8")
+        if password_b64 := secret.data.get("password"):
+            password = base64.b64decode(password_b64).decode("utf-8")
+
+    if secret.string_data:
+        username = secret.string_data.get("username") or username
+        password = secret.string_data.get("password") or password
+
+    if username and password:
+        return Auth(username=username, password=password)
+
+    _LOGGER.debug("Secret %s does not contain git credentials", secret.name)
+    return None
+
+
 def get_auth_from_secret(repo_url: str, secret: Secret) -> Auth | None:
     """Return the username and password from the secret.
 

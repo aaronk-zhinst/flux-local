@@ -621,6 +621,11 @@ class GitRepository(BaseManifest):
     ref: GitRepositoryRef | None = None
     """The Git reference to use for pull and checkout operations."""
 
+    secret_ref: LocalObjectReference | None = field(
+        metadata=field_options(alias="secretRef"), default=None
+    )
+    """Optional reference to a Secret containing authentication credentials."""
+
     @classmethod
     def parse_doc(cls, doc: dict[str, Any]) -> "GitRepository":
         """Parse a GitRepxository from a kubernetes resource."""
@@ -640,11 +645,16 @@ class GitRepository(BaseManifest):
         if ref_dict := spec.get("ref"):
             ref = GitRepositoryRef.parse_doc(ref_dict)
 
+        secret_ref: LocalObjectReference | None = None
+        if secret_ref_dict := spec.get("secretRef"):
+            secret_ref = LocalObjectReference.from_dict(secret_ref_dict)
+
         return cls(
             name=name,
             namespace=namespace,
             url=url,
             ref=ref,
+            secret_ref=secret_ref,
         )
 
     @property

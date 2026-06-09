@@ -8,6 +8,7 @@ import yaml
 
 from flux_local.manifest import (
     Cluster,
+    GitRepository,
     GitRepositoryRef,
     HelmRelease,
     Kustomization,
@@ -140,6 +141,43 @@ def test_parse_helm_repository() -> None:
     assert oci_repo.name == "podinfo"
     assert oci_repo.namespace == "flux-system"
     assert oci_repo.url == "oci://ghcr.io/stefanprodan/charts"
+
+
+def test_git_repository_parse_with_secret_ref() -> None:
+    """Test that GitRepository.parse_doc correctly parses secretRef."""
+    yaml_str = """
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
+    metadata:
+      name: charts
+      namespace: flux-system
+    spec:
+      url: https://github.com/example/private-charts.git
+      ref:
+        branch: main
+      secretRef:
+        name: charts-git-credentials
+    """
+    repo = GitRepository.parse_doc(yaml.safe_load(yaml_str))
+    assert repo.secret_ref is not None
+    assert repo.secret_ref.name == "charts-git-credentials"
+
+
+def test_git_repository_parse_without_secret_ref() -> None:
+    """Test that GitRepository.parse_doc sets secret_ref to None when absent."""
+    yaml_str = """
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
+    metadata:
+      name: charts
+      namespace: flux-system
+    spec:
+      url: https://github.com/example/public-charts.git
+      ref:
+        branch: main
+    """
+    repo = GitRepository.parse_doc(yaml.safe_load(yaml_str))
+    assert repo.secret_ref is None
 
 
 def test_git_repository_ref_str() -> None:

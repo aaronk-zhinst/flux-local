@@ -15,6 +15,7 @@ from flux_local.manifest import (
     BaseManifest,
     OCIRepository,
     GitRepository,
+    Secret,
 )
 from flux_local.store.in_memory import InMemoryStore
 from flux_local.store.status import Status
@@ -25,6 +26,7 @@ from flux_local.source_controller import (
     SourceController,
     SourceControllerConfig,
 )
+from flux_local.source_controller.secret import Auth
 from flux_local.task import get_task_service, task_service_context, TaskService
 
 
@@ -252,6 +254,83 @@ async def test_git_repository_branch_reconciliation(
     assert artifact.ref.ref_str == "branch:master"
     assert status is not None
     assert status.status == Status.READY
+
+
+@pytest.mark.asyncio
+async def test_git_repository_with_secret_ref_passes_auth_to_fetch(
+    store: InMemoryStore, controller: SourceController
+) -> None:
+    """Test that a GitRepository with secretRef resolves the secret and passes auth to fetch_git."""
+    repo_url = "https://github.com/example/private-charts.git"
+    secret_yaml = """
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: repo-credentials
+      namespace: test-ns
+    stringData:
+      username: ci-token
+      password: secret-password
+    """
+    secret = Secret.parse_doc(yaml.safe_load(secret_yaml), wipe_secrets=False)
+
+    git_repo_yaml = f"""
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: GitRepository
+    metadata:
+      name: private-repo
+      namespace: test-ns
+    spec:
+      url: {repo_url}
+      ref:
+        branch: main
+      secretRef:
+        name: repo-credentials
+      interval: 1m0s
+    """
+    git_repo = GitRepository.parse_doc(yaml.safe_load(git_repo_yaml))
+
+    rid = NamedResource(git_repo.kind, git_repo.namespace, git_repo.name)
+    captured_auth: list[Auth | None] = []
+    fake_artifact = GitArtifact(url=repo_url, local_path="/tmp/fake", ref=None)
+
+    async def mock_fetch_git(obj: GitRepository, auth: Auth | None = None) -> GitArtifact:
+        captured_auth.append(auth)
+        return fake_artifact
+
+    with patch("flux_local.source_controller.controller.fetch_git", mock_fetch_git):
+        store.add_object(secret)
+        store.add_object(git_repo)
+        task_service = get_task_service()
+        await task_service.block_till_done()
+
+    artifact = store.get_artifact(rid, GitArtifact)
+    assert artifact is not None
+    assert len(captured_auth) == 1
+    assert captured_auth[0] is not None
+    assert captured_auth[0].username == "ci-token"
+    assert captured_auth[0].password == "secret-password"
+
+
+@pytest.mark.asyncio
+async def test_git_repository_without_secret_ref_passes_no_auth(
+    git_repo: GitRepository, store: InMemoryStore, controller: SourceController
+) -> None:
+    """Test that a GitRepository without secretRef calls fetch_git with auth=None."""
+    captured_auth: list[Auth | None] = []
+    fake_artifact = GitArtifact(url=git_repo.url, local_path="/tmp/fake", ref=None)
+
+    async def mock_fetch_git(obj: GitRepository, auth: Auth | None = None) -> GitArtifact:
+        captured_auth.append(auth)
+        return fake_artifact
+
+    with patch("flux_local.source_controller.controller.fetch_git", mock_fetch_git):
+        store.add_object(git_repo)
+        task_service = get_task_service()
+        await task_service.block_till_done()
+
+    assert len(captured_auth) == 1
+    assert captured_auth[0] is None
 
 
 async def test_unsupported_kind() -> None:
